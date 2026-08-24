@@ -1,0 +1,121 @@
+#include <stdlib.h>
+
+// Struct for a server item in the heap
+typedef struct {
+    long long weight;
+    int index;
+    long long available_time;
+} Server;
+
+// Min-Heap 1: Sorts free servers by weight, then by index
+void pushFree(Server* heap, int* size, Server val) {
+    int i = (*size)++;
+    while (i > 0) {
+        int p = (i - 1) / 2;
+        if (heap[p].weight < val.weight || (heap[p].weight == val.weight && heap[p].index <= val.index)) break;
+        heap[i] = heap[p];
+        i = p;
+    }
+    heap[i] = val;
+}
+
+Server popFree(Server* heap, int* size) {
+    Server top = heap[0];
+    Server last = heap[--(*size)];
+    int i = 0;
+    while (i * 2 + 1 < *size) {
+        int left = i * 2 + 1, right = i * 2 + 2, child = left;
+        if (right < *size && (heap[right].weight < heap[left].weight || (heap[right].weight == heap[left].weight && heap[right].index < heap[left].index))) {
+            child = right;
+        }
+        if (last.weight < heap[child].weight || (last.weight == heap[child].weight && last.index <= heap[child].index)) break;
+        heap[i] = heap[child];
+        i = child;
+    }
+    if (*size > 0) heap[i] = last;
+    return top;
+}
+
+// Min-Heap 2: Sorts busy servers by free-time, then weight, then index
+void pushBusy(Server* heap, int* size, Server val) {
+    int i = (*size)++;
+    while (i > 0) {
+        int p = (i - 1) / 2;
+        if (heap[p].available_time < val.available_time ||
+           (heap[p].available_time == val.available_time && heap[p].weight < val.weight) ||
+           (heap[p].available_time == val.available_time && heap[p].weight == val.weight && heap[p].index <= val.index)) break;
+        heap[i] = heap[p];
+        i = p;
+    }
+    heap[i] = val;
+}
+
+Server popBusy(Server* heap, int* size) {
+    Server top = heap[0];
+    Server last = heap[--(*size)];
+    int i = 0;
+    while (i * 2 + 1 < *size) {
+        int left = i * 2 + 1, right = i * 2 + 2, child = left;
+        if (right < *size && (heap[right].available_time < heap[left].available_time ||
+           (heap[right].available_time == heap[left].available_time && heap[right].weight < heap[left].weight) ||
+           (heap[right].available_time == heap[left].available_time && heap[right].weight == heap[left].weight && heap[right].index < heap[left].index))) {
+            child = right;
+        }
+        if (last.available_time < heap[child].available_time ||
+           (last.available_time == heap[child].available_time && last.weight < heap[child].weight) ||
+           (last.available_time == heap[child].available_time && last.weight == heap[child].weight && last.index <= heap[child].index)) break;
+        heap[i] = heap[child];
+        i = child;
+    }
+    if (*size > 0) heap[i] = last;
+    return top;
+}
+
+int* assignTasks(int* servers, int serversSize, int* tasks, int tasksSize, int* returnSize) {
+    // Allocate space for our dynamic heaps
+    Server* free_heap = (Server*)malloc(sizeof(Server) * serversSize);
+    Server* busy_heap = (Server*)malloc(sizeof(Server) * serversSize);
+    int free_size = 0, busy_size = 0;
+
+    // Load initial servers into the free heap
+    for (int i = 0; i < serversSize; ++i) {
+        Server s = {servers[i], i, 0};
+        pushFree(free_heap, &free_size, s);
+    }
+
+    int* ans = (int*)malloc(sizeof(int) * tasksSize);
+    *returnSize = tasksSize;
+    long long currentTime = 0;
+
+    for (int i = 0; i < tasksSize; ++i) {
+        // Time cannot trail behind the arriving task index
+        if (currentTime < i) {
+            currentTime = i;
+        }
+
+        // Fast forward if no free servers exist
+        if (free_size == 0 && busy_size > 0 && busy_heap[0].available_time > currentTime) {
+            currentTime = busy_heap[0].available_time;
+        }
+
+        // Release all busy servers that completed their work by currentTime
+        while (busy_size > 0 && busy_heap[0].available_time <= currentTime) {
+            Server b = popBusy(busy_heap, &busy_size);
+            pushFree(free_heap, &free_size, b);
+        }
+
+        // Allocate the top free server to the task
+        Server best = popFree(free_heap, &free_size);
+        ans[i] = best.index;
+
+        // Push it into the busy heap with updated time tracking
+        best.available_time = currentTime + tasks[i];
+        pushBusy(busy_heap, &busy_size, best);
+    }
+
+    // Clean up heap footprints
+    free(free_heap);
+    free(busy_heap);
+
+    return ans;
+}
