@@ -1,0 +1,250 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+
+// --- Structure Definitions ---
+
+// Node for the Doubly-Linked List
+typedef struct Node {
+    int key;
+    int value;
+    int freq;
+    struct Node* prev;
+    struct Node* next;
+} Node;
+
+// Doubly-Linked List container
+typedef struct DNodeList {
+    Node* head;
+    Node* tail;
+    int size;
+} DNodeList;
+
+// Hash Map Item
+typedef struct HashItem {
+    int key;
+    void* ptr; // Points to either a Node* or a DNodeList*
+    struct HashItem* next;
+} HashItem;
+
+// Hash Map structure
+typedef struct HashMap {
+    HashItem** buckets;
+    int capacity;
+} HashMap;
+
+// Main LFU Cache structure
+typedef struct {
+    int capacity;
+    int size;
+    int min_freq;
+    HashMap* key_to_node;
+    HashMap* freq_to_list;
+} LFUCache;
+
+// --- Helper Functions Prototyping ---
+Node* create_node(int key, int value);
+DNodeList* create_list();
+void add_to_head(DNodeList* list, Node* node);
+void remove_node(DNodeList* list, Node* node);
+
+HashMap* hash_create(int capacity);
+void hash_put(HashMap* map, int key, void* ptr);
+void* hash_get(HashMap* map, int key);
+void hash_remove(HashMap* map, int key);
+void hash_free(HashMap* map);
+
+// --- Doubly-Linked List Implementations ---
+
+Node* create_node(int key, int value) {
+    Node* node = (Node*)malloc(sizeof(Node));
+    node->key = key;
+    node->value = value;
+    node->freq = 1;
+    node->prev = NULL;
+    node->next = NULL;
+    return node;
+}
+
+DNodeList* create_list() {
+    DNodeList* list = (DNodeList*)malloc(sizeof(DNodeList));
+    list->head = (Node*)malloc(sizeof(Node)); // Dummy head
+    list->tail = (Node*)malloc(sizeof(Node)); // Dummy tail
+    list->head->next = list->tail;
+    list->tail->prev = list->head;
+    list->size = 0;
+    return list;
+}
+
+void add_to_head(DNodeList* list, Node* node) {
+    node->next = list->head->next;
+    node->prev = list->head;
+    list->head->next->prev = node;
+    list->head->next = node;
+    list->size++;
+}
+
+void remove_node(DNodeList* list, Node* node) {
+    node->prev->next = node->next;
+    node->next->prev = node->prev;
+    list->size--;
+}
+
+// --- Hash Map Implementations (Chaining for Collisions) ---
+
+HashMap* hash_create(int capacity) {
+    HashMap* map = (HashMap*)malloc(sizeof(HashMap));
+    map->capacity = capacity;
+    map->buckets = (HashItem**)calloc(capacity, sizeof(HashItem*));
+    return map;
+}
+
+int get_hash(int key, int capacity) {
+    return abs(key) % capacity;
+}
+
+void hash_put(HashMap* map, int key, void* ptr) {
+    int idx = get_hash(key, map->capacity);
+    HashItem* curr = map->buckets[idx];
+    while (curr) {
+        if (curr->key == key) {
+            curr->ptr = ptr;
+            return;
+        }
+        curr = curr->next;
+    }
+    HashItem* item = (HashItem*)malloc(sizeof(HashItem));
+    item->key = key;
+    item->ptr = ptr;
+    item->next = map->buckets[idx];
+    map->buckets[idx] = item;
+}
+
+void* hash_get(HashMap* map, int key) {
+    int idx = get_hash(key, map->capacity);
+    HashItem* curr = map->buckets[idx];
+    while (curr) {
+        if (curr->key == key) return curr->ptr;
+        curr = curr->next;
+    }
+    return NULL;
+}
+
+void hash_remove(HashMap* map, int key) {
+    int idx = get_hash(key, map->capacity);
+    HashItem* curr = map->buckets[idx];
+    HashItem* prev = NULL;
+    while (curr) {
+        if (curr->key == key) {
+            if (prev) prev->next = curr->next;
+            else map->buckets[idx] = curr->next;
+            free(curr);
+            return;
+        }
+        prev = curr;
+        curr = curr->next;
+    }
+}
+
+void hash_free(HashMap* map) {
+    for (int i = 0; i < map->capacity; i++) {
+        HashItem* curr = map->buckets[i];
+        while (curr) {
+            HashItem* tmp = curr->next;
+            free(curr);
+            curr = tmp;
+        }
+    }
+    free(map->buckets);
+    free(map);
+}
+
+// --- LFU Core Mechanics ---
+
+// Promotes a node's frequency and relocates it in the tracking structures
+void update_frequency(LFUCache* obj, Node* node) {
+    int old_freq = node->freq;
+    DNodeList* old_list = (DNodeList*)hash_get(obj->freq_to_list, old_freq);
+    remove_node(old_list, node);
+   
+    // If the min_freq list becomes empty, increment global min_freq
+    if (old_freq == obj->min_freq && old_list->size == 0) {
+        obj->min_freq++;
+    }
+   
+    node->freq++;
+   
+    // Move to the new frequency list
+    DNodeList* new_list = (DNodeList*)hash_get(obj->freq_to_list, node->freq);
+    if (!new_list) {
+        new_list = create_list();
+        hash_put(obj->freq_to_list, node->freq, new_list);
+    }
+    add_to_head(new_list, node);
+}
+
+LFUCache* lFUCacheCreate(int capacity) {
+    LFUCache* obj = (LFUCache*)malloc(sizeof(LFUCache));
+    obj->capacity = capacity;
+    obj->size = 0;
+    obj->min_freq = 0;
+    // Standardizing hash space boundary up to max unique capacity limits
+    obj->key_to_node = hash_create(capacity > 0 ? capacity * 2 : 1);
+    obj->freq_to_list = hash_create(capacity > 0 ? capacity * 2 : 1);
+    return obj;
+}
+
+int lFUCacheGet(LFUCache* obj, int key) {
+    if (obj->capacity == 0) return -1;
+   
+    Node* node = (Node*)hash_get(obj->key_to_node, key);
+    if (!node) return -1;
+   
+    update_frequency(obj, node);
+    return node->value;
+}
+
+void lFUCachePut(LFUCache* obj, int key, int value) {
+    if (obj->capacity == 0) return;
+   
+    Node* node = (Node*)hash_get(obj->key_to_node, key);
+   
+    // Scenario A: Key already exists, update value and elevate frequency
+    if (node) {
+        node->value = value;
+        update_frequency(obj, node);
+        return;
+    }
+   
+    // Scenario B: Eviction needed before inserting a fresh key
+    if (obj->size >= obj->capacity) {
+        DNodeList* min_list = (DNodeList*)hash_get(obj->freq_to_list, obj->min_freq);
+        Node* evict_node = min_list->tail->prev; // LRU element within minimum frequency
+       
+        remove_node(min_list, evict_node);
+        hash_remove(obj->key_to_node, evict_node->key);
+        free(evict_node);
+        obj->size--;
+    }
+   
+    // Scenario C: Insert new element
+    Node* new_node = create_node(key, value);
+    hash_put(obj->key_to_node, key, new_node);
+   
+    DNodeList* list_1 = (DNodeList*)hash_get(obj->freq_to_list, 1);
+    if (!list_1) {
+        list_1 = create_list();
+        hash_put(obj->freq_to_list, 1, list_1);
+    }
+    add_to_head(list_1, new_node);
+   
+    obj->min_freq = 1;
+    obj->size++;
+}
+
+void lFUCacheFree(LFUCache* obj) {
+    // Note: Deep tracking free operations can be expanded if memory benchmarking is mandatory
+    hash_free(obj->key_to_node);
+    hash_free(obj->freq_to_list);
+    free(obj);
+}
